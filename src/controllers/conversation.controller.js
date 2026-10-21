@@ -12,6 +12,8 @@ import {
   setCachedConversation,
   setCachedConversationList,
 } from "../services/conversation-cache.service.js";
+import { logException } from "../observability/logger.js";
+import { captureException } from "../observability/error-monitoring.js";
 
 function formatConversation(conversation, includeMessages = true) {
   return {
@@ -44,7 +46,8 @@ export async function create(req, res) {
       conversation: formatConversation(conversation),
     });
   } catch (error) {
-    console.error("Unable to create conversation:", error);
+    logException("conversation.create_failed", error, { requestId: req.id });
+    captureException(error, { requestId: req.id });
     return res.status(500).json({
       success: false,
       error: "Unable to create a conversation right now.",
@@ -84,7 +87,8 @@ export async function list(req, res) {
       conversations: formattedConversations,
     });
   } catch (error) {
-    console.error("Unable to load conversations:", error);
+    logException("conversation.list_failed", error, { requestId: req.id });
+    captureException(error, { requestId: req.id });
     return res.status(500).json({
       success: false,
       error: "Unable to load conversations right now.",
@@ -130,7 +134,8 @@ export async function get(req, res) {
       conversation: formattedConversation,
     });
   } catch (error) {
-    console.error("Unable to load conversation:", error);
+    logException("conversation.get_failed", error, { requestId: req.id });
+    captureException(error, { requestId: req.id });
     return res.status(500).json({
       success: false,
       error: "Unable to load this conversation right now.",
@@ -157,7 +162,8 @@ export async function remove(req, res) {
     await invalidateConversationCache(req.auth.userId, req.params.id);
     return res.status(200).json({ success: true });
   } catch (error) {
-    console.error("Unable to delete conversation:", error);
+    logException("conversation.delete_failed", error, { requestId: req.id });
+    captureException(error, { requestId: req.id });
     return res.status(500).json({
       success: false,
       error: "Unable to delete this conversation right now.",

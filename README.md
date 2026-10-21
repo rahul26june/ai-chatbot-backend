@@ -70,6 +70,13 @@ remain) and remove persisted data only with `docker compose down -v`.
 - `GET /api/conversations/:id` loads one conversation and its messages.
 - `DELETE /api/conversations/:id` deletes one of the authenticated user's
   conversations.
+- `POST /api/agents/workflows` starts an agent workflow with
+  `{ "task": "..." }`; optionally pass a configured `provider` (`gemini`,
+  `openai`, `deepseek`, or `claude`). It returns `202` with a workflow ID and
+  initial progress.
+- `GET /api/agents/workflows/:id` returns workflow status, per-agent progress,
+  and completed outputs. Poll this endpoint while the workflow is running.
+- `GET /api/agents` lists the authenticated user's latest 20 workflow summaries.
 
 Chat and conversation routes require an `Authorization: Bearer <token>` header.
 Registration and login return a signed JWT and the public user profile.
@@ -116,3 +123,44 @@ reachable at `REDIS_URL` before the backend starts.
 The web client consumes `/api/chat/stream` with `fetch()` and displays text as
 it arrives. Stream logs include request IDs, cache status, output length,
 time-to-first-token, and total duration; prompt and response text are not logged.
+
+## Monitoring and security
+
+Backend logs are structured JSON via Winston and include a generated
+`X-Request-Id` for correlating each request. Optional Sentry error reporting is
+enabled by setting `SENTRY_DSN`; PII collection is disabled. Health endpoints
+are available at `/api/health/live` and `/api/health/ready` (`/api/health`
+remains an alias for readiness).
+
+Prometheus metrics are exposed at `/api/metrics` for internal scraping. The
+frontend Nginx proxy returns 404 for this path so metrics are not exposed
+through the public frontend. Prometheus scrapes the backend every 15 seconds;
+Grafana is provisioned with the AI Chatbot Operations dashboard. In local
+Compose, open Grafana at `http://localhost:3001` (default login `admin` /
+`admin`, then change the password immediately) and Prometheus at
+`http://localhost:9090`. These ports bind only to loopback. For the release
+Compose stack, set a strong `GRAFANA_ADMIN_PASSWORD` in the server `.env` and
+reach Grafana through a secure SSH tunnel or TLS reverse proxy.
+
+Helmet adds standard security response headers. Rate limits are configurable
+with `API_RATE_LIMIT_*`, `AUTH_RATE_LIMIT_*`, and `CHAT_RATE_LIMIT_*` settings;
+defaults are 300 API requests/minute, 10 auth requests/15 minutes, and 30 chat
+requests/minute per client IP. Agent starts are separately limited by
+`AGENT_RATE_LIMIT_*` (default: five per minute per client IP). Set `TRUST_PROXY`
+only to the number of trusted proxies in front of the backend.
+
+## Agent workflows
+
+An authenticated workflow runs the Research, Coding, Review, and Summary
+agents sequentially using the selected provider's existing adapter and fallback
+chain. The research stage uses the model's supplied knowledge and task context;
+it does not browse the web. The Coding Agent returns suggestions and code in
+the workflow response only: it does not edit workspace files or execute code.
+Review and summary stages receive the earlier outputs as context.
+
+Workflow records, step outputs, and progress are saved to MongoDB. Redis keeps
+a 24-hour, owner-scoped progress snapshot; the API verifies ownership in
+MongoDB before returning it. Failed stages expose a generic error to the
+caller, while logs identify the workflow and agent without logging task text,
+generated code, or provider error messages. Workflow task/output content is
+persisted as user data in MongoDB; secure and back up that database accordingly.

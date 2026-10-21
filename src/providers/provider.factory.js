@@ -1,6 +1,7 @@
 import { createAnthropicProvider } from "./anthropic.provider.js";
 import { createGeminiProvider } from "./gemini.provider.js";
 import { createOpenAICompatibleProvider } from "./openai-compatible.provider.js";
+import { logger } from "../observability/logger.js";
 
 const PROVIDERS = {
   gemini: {
@@ -88,7 +89,7 @@ async function* prependEvents(events, iterator) {
   }
 }
 
-export function createProviderManager(providers, { onFallback = console.warn } = {}) {
+export function createProviderManager(providers, { onFallback = (event) => logger.warn(event) } = {}) {
   if (!providers.length) {
     throw new Error("At least one AI provider must be configured.");
   }

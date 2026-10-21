@@ -2,6 +2,8 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { getJwtSecret } from "../config/security.js";
 import User from "../models/user.model.js";
+import { logException } from "../observability/logger.js";
+import { captureException } from "../observability/error-monitoring.js";
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const PASSWORD_MIN_LENGTH = 8;
@@ -63,7 +65,8 @@ export async function register(req, res) {
         error: "An account with this email already exists.",
       });
     }
-    console.error("Unable to register account:", error);
+    logException("auth.registration_failed", error, { requestId: req.id });
+    captureException(error, { requestId: req.id });
     return res.status(500).json({
       success: false,
       error: "Unable to create your account right now.",
@@ -103,7 +106,8 @@ export async function login(req, res) {
 
     return sendAuthResponse(res, user);
   } catch (error) {
-    console.error("Unable to log in:", error);
+    logException("auth.login_failed", error, { requestId: req.id });
+    captureException(error, { requestId: req.id });
     return res.status(500).json({
       success: false,
       error: "Unable to log in right now.",

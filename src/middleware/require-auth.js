@@ -1,5 +1,6 @@
 import jwt from "jsonwebtoken";
 import { getJwtSecret } from "../config/security.js";
+import { logger } from "../observability/logger.js";
 
 export function requireAuth(req, res, next) {
   const authorization = req.get("authorization") ?? "";
@@ -16,7 +17,7 @@ export function requireAuth(req, res, next) {
   try {
     secret = getJwtSecret();
   } catch {
-    console.error("JWT_SECRET must contain at least 32 characters.");
+    logger.error("auth.configuration_error", { setting: "JWT_SECRET" });
     return res.status(500).json({
       success: false,
       error: "Authentication is not configured.",

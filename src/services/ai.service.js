@@ -7,6 +7,8 @@ import {
 import {
   generatePromptCacheKey,
 } from "./cache-key.service.js";
+import { logger } from "../observability/logger.js";
+import { recordProviderUsage } from "../observability/metrics.js";
 
 const CONTEXT_WINDOW_MESSAGES = 20;
 
@@ -87,12 +89,11 @@ async function chatWithAI(
     await getCache(cacheKey);
 
   if (cachedResponse) {
-    console.info(JSON.stringify({
-      event: "ai.cache.hit",
+    logger.info("ai.cache.hit", {
       cache: "redis",
       provider: aiProvider.name,
       model: aiProvider.model,
-    }));
+    });
 
     return {
       answer: cachedResponse,
@@ -123,14 +124,19 @@ Assistant:`;
     answer
   );
   const cost = estimateProviderCost(provider, usage);
-  console.info(JSON.stringify({
-    event: "ai.response.completed",
+  recordProviderUsage({
+    provider: provider.provider ?? provider.name,
+    model: provider.model,
+    usage,
+    estimatedCostUsd: cost.estimatedCostUsd,
+  });
+  logger.info("ai.response.completed", {
     provider: provider.provider ?? provider.name,
     model: provider.model,
     inputTokens: usage?.inputTokens ?? null,
     outputTokens: usage?.outputTokens ?? null,
     ...cost,
-  }));
+  });
 
   return {
     answer,
@@ -147,10 +153,11 @@ export async function createChatResponseStream(
   const cacheKey = generatePromptCacheKey(message, history);
   const cachedResponse = await getCache(cacheKey);
   if (typeof cachedResponse === "string") {
-    console.info(JSON.stringify({
-      event: "ai.cache.hit",
+    logger.info("ai.cache.hit", {
       cache: "redis",
-    }));
+      provider: aiProvider.name,
+      model: aiProvider.model,
+    });
     return {
       cached: true,
       provider: aiProvider.name,

@@ -1,10 +1,12 @@
-import { randomUUID } from "node:crypto";
 import mongoose from "mongoose";
 import {
   createConversation,
   findConversation,
 } from "../repositories/conversation.repository.js";
 import { invalidateConversationCache } from "../services/conversation-cache.service.js";
+import { logger, logException } from "../observability/logger.js";
+import { captureException } from "../observability/error-monitoring.js";
+import { recordStreamMetrics } from "../observability/metrics.js";
 import {
   createChatResponseStream,
   estimateProviderCost,
@@ -95,14 +97,15 @@ export default async function streamChatController(req, res) {
       await invalidateConversationCache(req.auth.userId);
     }
   } catch (error) {
-    console.error("Unable to prepare chat stream:", error);
+    logException("chat.stream.prepare_failed", error, { requestId: req.id });
+    captureException(error, { requestId: req.id });
     return res.status(500).json({
       success: false,
       error: "Unable to start the chat response.",
     });
   }
 
-  const requestId = randomUUID();
+  const requestId = req.id;
   const startedAt = performance.now();
   const abortController = new AbortController();
   let firstTokenAt;
@@ -185,12 +188,11 @@ export default async function streamChatController(req, res) {
       formattedConversation = formatConversation(conversation);
     } catch (error) {
       generationError = error;
-      console.error(JSON.stringify({
-        event: "chat.stream.persistence_error",
+      logException("chat.stream.persistence_error", error, {
         requestId,
         conversationId: conversation._id.toString(),
-        error: error.message,
-      }));
+      });
+      captureException(error, { requestId });
     }
   }
 
@@ -199,12 +201,20 @@ export default async function streamChatController(req, res) {
     ? null
     : Math.round(firstTokenAt - startedAt);
   const cost = estimateProviderCost(providerPricing ?? {}, usage);
-  console.info(JSON.stringify({
-    event: generationError
+  const result = generationError
       ? "chat.stream.failed"
       : completed
         ? "chat.stream.completed"
-        : "chat.stream.cancelled",
+        : "chat.stream.cancelled";
+  recordStreamMetrics({
+    provider,
+    model,
+    result,
+    cached,
+    usage,
+    estimatedCostUsd: cost.estimatedCostUsd,
+  });
+  logger.info(result, {
     requestId,
     conversationId: conversation._id.toString(),
     durationMs,
@@ -215,8 +225,10 @@ export default async function streamChatController(req, res) {
     model,
     inputTokens: usage?.inputTokens ?? null,
     outputTokens: usage?.outputTokens ?? null,
-    ...cost,
-  }));
+    estimatedCostUsd: cost.estimatedCostUsd,
+    costConfigured: cost.costConfigured,
+  });
+  if (generationError) captureException(generationError, { requestId });
 
   if (generationError) {
     if (!res.destroyed && !res.writableEnded) {

@@ -5,6 +5,8 @@ import {
   findConversation,
 } from "../repositories/conversation.repository.js";
 import { invalidateConversationCache } from "../services/conversation-cache.service.js";
+import { logException } from "../observability/logger.js";
+import { captureException } from "../observability/error-monitoring.js";
 
 const MAX_MESSAGE_LENGTH = 4000;
 const MAX_HISTORY_MESSAGES = 19;
@@ -104,7 +106,8 @@ const chatController = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("Error occurred while chatting with AI:", error);
+    logException("chat.request_failed", error, { requestId: req.id });
+    captureException(error, { requestId: req.id });
     return res.status(500).json({
       success: false,
       error: "An error occurred while processing your request.",
