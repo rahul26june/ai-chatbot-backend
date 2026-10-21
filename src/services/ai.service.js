@@ -9,6 +9,12 @@ import {
 } from "./cache-key.service.js";
 import { logger } from "../observability/logger.js";
 import { recordProviderUsage } from "../observability/metrics.js";
+import {
+  buildGuardedPrompt,
+  limitGeneratedText,
+  limitGeneratedStream,
+  MAX_CHAT_RESPONSE_LENGTH,
+} from "./guardrails.service.js";
 
 const CONTEXT_WINDOW_MESSAGES = 20;
 
@@ -88,7 +94,7 @@ async function chatWithAI(
   const cachedResponse =
     await getCache(cacheKey);
 
-  if (cachedResponse) {
+  if (typeof cachedResponse === "string") {
     logger.info("ai.cache.hit", {
       cache: "redis",
       provider: aiProvider.name,
@@ -96,26 +102,23 @@ async function chatWithAI(
     });
 
     return {
-      answer: cachedResponse,
+      answer: limitGeneratedText(cachedResponse, MAX_CHAT_RESPONSE_LENGTH),
       cached: true,
       usage: null,
     };
   }
 
-  const prompt = `Continue this conversation and respond to the latest user message.
-
-${buildConversationContext(
-  message,
-  history
-)}
-
-Assistant:`;
+  const prompt = buildGuardedPrompt(
+    "Continue the conversation and respond to the latest user message.",
+    { conversation: buildConversationContext(message, history) },
+  );
 
   const result =
     await aiProvider.generateResponse(
       prompt
     );
-  const answer = typeof result === "string" ? result : result.text;
+  const generatedAnswer = typeof result === "string" ? result : result.text;
+  const answer = limitGeneratedText(generatedAnswer, MAX_CHAT_RESPONSE_LENGTH);
   const usage = normalizeTokenUsage(typeof result === "string" ? null : result.usage);
   const provider = typeof result === "string" ? aiProvider : result;
 
@@ -165,26 +168,25 @@ export async function createChatResponseStream(
       inputCostPerMillion: aiProvider.inputCostPerMillion,
       outputCostPerMillion: aiProvider.outputCostPerMillion,
       stream: (async function* replayCachedResponse() {
-        yield cachedResponse;
+        yield limitGeneratedText(cachedResponse, MAX_CHAT_RESPONSE_LENGTH);
       }()),
     };
   }
 
-  const prompt = `Continue this conversation and respond to the latest user message.
-
-${buildConversationContext(message, history)}
-
-Assistant:`;
+  const prompt = buildGuardedPrompt(
+    "Continue the conversation and respond to the latest user message.",
+    { conversation: buildConversationContext(message, history) },
+  );
   const openedStream = await aiProvider.openResponseStream(prompt, { signal });
   const provider = openedStream.provider;
   const stream = (async function* cacheCompletedResponse() {
     let answer = "";
-    for await (const item of openedStream.stream) {
+    for await (const item of limitGeneratedStream(
+      openedStream.stream,
+      MAX_CHAT_RESPONSE_LENGTH,
+    )) {
       if (signal?.aborted) return;
-      if (typeof item === "string") {
-        answer += item;
-        yield { type: "text", text: item };
-      } else if (item?.type === "text" && typeof item.text === "string") {
+      if (item?.type === "text" && typeof item.text === "string") {
         answer += item.text;
         yield item;
       } else if (item?.type === "usage") {
